@@ -1,0 +1,545 @@
+# Based on the sudoku solver from the following page:
+# https://norvig.com/sudoku.html
+
+# from pprint import pprint
+import strutils
+import strformat
+import sequtils
+import times
+import tables
+import sets
+import sugar
+
+# let INITIAL_GRID = [
+#     [5, 3, 0, 0, 7, 0, 0, 0, 0],
+#     [6, 0, 0, 1, 9, 5, 0, 0, 0],
+#     [0, 9, 8, 0, 0, 0, 0, 6, 0],
+#     [8, 0, 0, 0, 6, 0, 0, 0, 3],
+#     [4, 0, 0, 8, 0, 3, 0, 0, 1],
+#     [7, 0, 0, 0, 2, 0, 0, 0, 6],
+#     [0, 6, 0, 0, 0, 0, 2, 8, 0],
+#     [0, 0, 0, 4, 1, 9, 0, 0, 5],
+#     # [0, 0, 0, 0, 8, 0, 0, 7, 9],  # <-- only one possible solution
+#     [0, 0, 0, 0, 8, 0, 0, 0, 0],  # <-- two possible solutions
+# ]
+
+let INITIAL_GRID = [
+    [0, 0, 1, 2, 7, 0, 9, 0, 0],
+    [0, 4, 9, 1, 3, 8, 0, 0, 0],
+    [0, 0, 7, 0, 4, 5, 0, 1, 3],
+    [3, 7, 0, 0, 2, 9, 0, 6, 1],
+    [1, 8, 5, 3, 0, 0, 0, 0, 9],
+    [9, 0, 0, 0, 0, 4, 0, 7, 8],
+    [0, 0, 6, 7, 0, 0, 0, 0, 2],
+    [2, 1, 8, 6, 0, 3, 0, 0, 5],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],
+]
+
+# # https://projecteuler.net/problem=96
+# let INITIAL_GRID = [
+#     [0, 0, 3, 0, 2, 0, 6, 0, 0],
+#     [9, 0, 0, 3, 0, 5, 0, 0, 1],
+#     [0, 0, 1, 8, 0, 6, 4, 0, 0],
+#     [0, 0, 8, 1, 0, 2, 9, 0, 0],
+#     [7, 0, 0, 0, 0, 0, 0, 0, 8],
+#     [0, 0, 6, 7, 0, 8, 2, 0, 0],
+#     [0, 0, 2, 6, 0, 9, 5, 0, 0],
+#     [8, 0, 0, 2, 0, 3, 0, 0, 9],
+#     [0, 0, 5, 0, 1, 0, 3, 0, 0],
+# ]
+
+type
+    Grid = array[9, array[9, int]]
+
+# let INITIAL_GRID = [
+#     [0, 0, 3, 0, 2, 0, 6, 0, 0],
+#     [9, 0, 0, 3, 0, 5, 0, 0, 1],
+#     [0, 0, 1, 8, 0, 6, 4, 0, 0],
+#     [0, 0, 8, 1, 0, 2, 9, 0, 0],
+#     [0, 0, 0, 0, 0, 0, 0, 0, 8],
+#     [0, 0, 0, 0, 0, 8, 2, 0, 0],
+#     [0, 0, 0, 0, 0, 0, 5, 0, 0],
+#     [8, 0, 0, 0, 0, 3, 0, 0, 9],
+#     [0, 0, 0, 0, 0, 0, 3, 0, 0],
+# ]
+
+
+proc `$`(grid: Grid): string =
+    var lines: seq[string] = @[]
+    for y in 0 ..< grid.len:
+        if y mod 3 == 0 and y > 0:
+            lines.add("-------+-------+-------")
+        
+        let row = grid[y]       
+        var rowStr: string
+        for x, c in row:
+            # echo x
+            let divisibleBy3 = x mod 3 == 0
+            if divisibleBy3 and x > 0:
+                rowStr.add(" |")
+            if c == 0:
+                rowStr.add("  ")  # blank
+            else:
+                rowStr.add(" " & $c)
+        lines.add(rowStr)
+    result = lines.join("\n")
+
+proc displayGrid(grid: Grid) =
+    echo $grid
+
+
+#[
+echo "Start:"
+displayGrid(INITIAL_GRID)
+
+proc possible(grid: Grid, row: int, col: int, n: int): bool =
+    
+    # Scan column for n
+    for y in 0 ..< 9:
+        if grid[y][col] == n:
+            return false
+    
+    # Scan row for n
+    for x in 0 ..< 9:
+        if grid[row][x] == n:
+            return false
+    
+    # Scan box for n; box = a box of 9 cells of the nine 3x3 boxes in a grid
+    let
+        box_y = row div 3  #int(row / 3)
+        box_x = col div 3  #int(col / 3)
+        y_min = box_y * 3
+        y_max = y_min + 3
+        x_min = box_x * 3
+        x_max = x_min + 3
+    for y in y_min ..< y_max:
+        for x in x_min ..< x_max:
+            if grid[y][x] == n:
+                return false
+    
+    return true
+
+type
+    SolverFinished = object of CatchableError
+
+
+proc solver(sudoku: Grid): seq[Grid] =
+    var modified_cells: seq[array[2, int]]
+    var values: seq[int] = @[]
+
+    # Go through each empty cell in the grid
+    var 
+        y = 0
+        x = 0
+        n = 1
+    
+    var grid = sudoku
+
+    try:
+        while true:
+            while y < 9:
+                x = 0
+                while x < 9:
+                    # echo "x: ", x
+                    if grid[y][x] == 0:  # Current cell is empty
+
+                        # Attempt to see if each number is possible on the current empty cell
+                        while n < 10:
+                            if possible(grid, y, x, n):
+                                # grid[y][x] = n  # Fill cell
+                                # solver()  # Find next empty to next cell
+                                # grid[y][x] = 0  # backtrack
+                                break
+                            n += 1  # try next number...
+
+                        if n == 10:
+                            # echo modified_cells
+                            if len(modified_cells) > 0:
+                                # All numbers attempted (all not possible), so rewind stack by 1
+                                (y, x) = modified_cells.pop()
+                                grid[y][x] = 0  # clear the cell so it can be found by if-condition above
+                                n = values.pop() + 1
+                                # echo fmt"backtrack: ({y}, {x}), n={n}"
+                                continue
+                            else:
+                                # Unable to rewind anymore
+                                raise new SolverFinished
+                        else:
+                            grid[y][x] = n  # Fill cell
+                            values.add(n)
+                            modified_cells.add([y, x])
+                            n = 1
+                        # return
+                    x += 1
+                y += 1
+            
+            # Solved - all white spaces filled
+            # var solved: array[9, array[9, int]]
+            # solved = grid
+            # result.add(solved)
+            result.add(grid)
+            # pprint(grid)
+            # input("More?")
+
+            # Rewind stack so we can attempt other numbers
+            (y, x) = modified_cells.pop()
+            grid[y][x] = 0  # clear the cell so it can be found by if-condition above
+            n = values.pop() + 1
+    except SolverFinished:
+        echo "Solver finished"
+    return result
+
+
+
+# assert possible(4, 4, 5) is True
+# assert possible(4, 4, 3) is False
+
+let startTime = getTime()
+let results = solver(INITIAL_GRID)
+let endTime = getTime()
+
+# echo "startTime: ", startTime
+# echo "endTime: ", endTime
+
+echo "Solved:"
+for solved in results:
+    # displayGrid(solved)
+    echo $solved
+    echo ""
+echo fmt"{len(results)} solutions found"
+
+
+let elapsedTime = endTime - startTime
+echo "elapsedTime: ", elapsedTime
+]#
+
+proc cross(A: string, B: string): seq[string] =
+    for a in A:
+        for b in B:
+            result.add(a & b)
+
+proc cross(A: string, B: char): seq[string] =
+    for a in A:
+        result.add(a & B)
+
+proc cross(A: char, B: string): seq[string] =
+    for b in B:
+        result.add(A & b)
+
+let digits = "123456789"
+let rows = "ABCDEFGHI"
+let cols = digits
+let squares = cross(rows, digits)
+var unitlist: seq[seq[string]]
+block BuildUnitList:
+    for c in cols:
+        unitlist.add(cross(rows, c))
+    for r in rows:
+        unitlist.add(cross(r, cols))
+    for cs in ["123", "456", "789"]:
+        for rs in ["ABC", "DEF", "GHI"]:
+            unitlist.add(cross(rs, cs))
+
+var units = Table[string, seq[seq[string]]]()
+block BuildUnits:
+    for s in squares:
+        units[s] = @[]
+        for u in unitlist:
+            if s in u:
+                units[s] &= u
+# echo units["A1"]
+
+#var peers = Table[string, HashSet[string]]()
+var peers = Table[string, seq[string]]()
+block BuildPeers:
+    for s in squares:
+        var square_peers: HashSet[string]
+        for u in units[s]:
+            square_peers = square_peers + toHashSet(u)
+        square_peers = square_peers - toHashSet([s])
+        # peers[s] = square_peers
+        peers[s] = square_peers.toSeq
+# echo peers["A1"]
+
+proc test() =
+    # A set of unit tests.
+    assert len(squares) == 81
+    assert len(unitlist) == 27
+
+    assert peers["A1"].len == 20
+    # Check all squares have 3 units:
+    assert squares.all(proc (s: string): bool = (units[s].len == 3))
+    # Check all squares have 20 peers:
+    assert squares.all(proc (s: string): bool = (peers[s].len == 20))
+
+    # echo units["C2"]
+    assert units["C2"] == @[
+        @["A2", "B2", "C2", "D2", "E2", "F2", "G2", "H2", "I2"],
+        @["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"],
+        @["A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3"]]
+
+    # assert peers["C2"] == toHashSet(
+    # echo "peers[\"C2\"] = ", peers["C2"]
+    assert peers["C2"].toHashSet == [
+        "A2", "B2", "D2", "E2", "F2", "G2", "H2", "I2",
+        "C1", "C3", "C4", "C5", "C6", "C7", "C8", "C9",
+        "A1", "A3", "B1", "B3"].toHashSet
+        
+    echo "All tests pass."
+
+test()
+
+# proc assign(values: Table[string, string], s: string, d: string): Table[string, string]
+proc assign(values: var Table[string, string], s: string, d: string): bool
+proc grid_values(grid: string): Table[string, string]
+proc eliminate(values: var Table[string, string], s: string, d: string): bool
+
+proc parse_grid(grid: string): Table[string, string] =
+    #[Convert grid to a dict of possible values, {square: digits}, or 
+    return False if a contradiction is detected.]#
+    var values: Table[string, string]
+    for s in squares:
+        values[s] = digits
+    for s, d in grid_values(grid):
+        # echo "[parse_grid] s: ", s, ", d: ", d
+        if d in digits and not assign(values, s, d):
+            return initTable[string, string]()
+    return values
+
+
+proc grid_values(grid: string): Table[string, string] =
+    #[ Convert grid into a table of {square: char} with '0' or '.' for empties. ]#
+    var chars: string
+    for c in grid:
+        if c in digits or c in "0.":
+            chars &= c
+    assert len(chars) == 81
+    for i, s in squares:
+        result[s] = $chars[i]
+    # echo "grid_values: ", result
+    return result
+
+proc assign(values: var Table[string, string], s: string, d: string): bool =
+    #[ Eliminitae all other values (except d) from values[s] and propagate.
+    Return values, except return False if a contradiction is detected. ]#
+    let other_values = values[s].replace(d, "")
+    # if other_values.all(proc (d2: char): bool = return eliminate(values, s, $d2)):
+    #     # result = values
+    #     return true
+    # else:
+    #     return false
+    var eliminate_results: seq[bool]
+    for d2 in other_values:
+        let eliminated = eliminate(values, s, $d2)
+        eliminate_results.add(eliminated)
+    
+    for r in eliminate_results:
+        if r == false:
+            # echo "[assign] eliminate values: ", values
+            return false
+    return true
+
+
+# proc eliminate(values: Table[string, string], s: string, d: string): Table[string, string] =
+#     #[ Eliminate d from values[s]; propagate when values or places <= 2.
+#     Return values, except return False if a contradiction is detected. ]#
+#     if not ( d in values[s]):
+#         return result  # Already eliminated
+#     values[s] = values[s].replace(d, "")
+#     # (1) If a square s is reduced to one value, then eliminate d2 from the peers.
+#     if len(values[s]) == 0:
+#         return result  # Contradiction: removed last value
+#     elif len(values[s]) == 1:
+#         let d2 = values[s]
+#         if not peers[s].all(proc (s2: string): bool = eliminate(values, s2, d2).len > 0):
+#             return result
+#     # (2) If a unit u is reduced to only one place for a value d, then put it there.
+#     for u in units[s]:
+#         var dplaces: seq[string]
+#         for s in u:
+#             if d in values[s]: dplaces.add(s)
+#         if len(dplaces) == 0:
+#             return result  # Contradiction: no place for this value
+#         elif len(dplaces) == 1:
+#             # d can only be in one place in unit; assign it there
+#             if not assign(values, dplaces[0], d):
+#                 return result
+#     return values
+
+# Doesn't work ^^^ - errors when attempting to modify values parameter (immutable)
+
+# proc eliminate(values: Table[string, string], s: string, d: string): Table[string, string] =
+#     #[ Eliminate d from values[s]; propagate when values or places <= 2.
+#     Return values, except return empty table if a contradiction is detected. ]#
+#     var tempValues: Table[string, string] = values
+#     if not (d in tempValues[s]):
+#         return tempValues  # Already eliminated
+#     tempValues[s] = tempValues[s].replace(d, "")
+#     # (1) If a square s is reduced to one value, then eliminate d2 from the peers.
+#     if len(tempValues[s]) == 0:
+#         tempValues.clear()
+#         return tempValues  # Contradiction: removed last value
+#     elif len(tempValues[s]) == 1:
+#         let d2 = tempValues[s]
+#         #if not peers[s].all(proc (s2: string): bool = return (eliminate(tempValues, s2, d2).len > 0)):
+#         # if not peers[s].map(proc (s2: string): bool = eliminate(tempValues, s2, d2).len > 0).all():
+#         if not all(peers[s], proc (s2: string): bool = return (eliminate(tempValues, s2, d2).len > 0)):
+#             tempValues.clear()
+#             return tempValues
+#     # (2) If a unit u is reduced to only one place for a value d, then put it there.
+#     for u in units[s]:
+#         var dplaces: seq[string]
+#         for s in u:
+#             if d in tempValues[s]: dplaces.add(s)
+#         if len(dplaces) == 0:
+#             tempValues.clear()
+#             return tempValues  # Contradiction: no place for this value
+#         elif len(dplaces) == 1:
+#             # d can only be in one place in unit; assign it there
+#             # if not assign(tempValues, dplaces[0], d):
+#             if assign(tempValues, dplaces[0], d).len == 0:
+#                 tempValues.clear()
+#                 return tempValues
+#     return tempValues
+
+
+proc eliminate(values: var Table[string, string], s: string, d: string): bool =
+    #[ Eliminate d from values[s]; propagate when values or places <= 2.
+    Return values, except return empty table if a contradiction is detected. ]#
+    
+    if not (d in values[s]):
+        return true  # Already eliminated
+    values[s] = values[s].replace(d, "")
+    # (1) If a square s is reduced to one value, then eliminate d2 from the peers.
+    if len(values[s]) == 0:
+        return false  # Contradiction: removed last value
+    elif len(values[s]) == 1:
+        let d2 = values[s]
+        #if not peers[s].all(proc (s2: string): bool = return (eliminate(values, s2, d2).len > 0)):
+        # if not peers[s].map(proc (s2: string): bool = eliminate(values, s2, d2).len > 0).all():
+        # if not all(peers[s], proc (s2: string): bool = return eliminate(values, s2, d2)):
+        #     return false
+        var eliminate_results: seq[bool]
+        for s2 in peers[s]:
+            # if not eliminate(values, s2, d2):
+            #     return false
+            eliminate_results.add(eliminate(values, s2, d2))
+        for r in eliminate_results:
+            if r == false: return false
+    # (2) If a unit u is reduced to only one place for a value d, then put it there.
+    for u in units[s]:
+        var dplaces: seq[string]
+        for s in u:
+            if d in values[s]: dplaces.add(s)
+        if len(dplaces) == 0:
+            return false  # Contradiction: no place for this value
+        elif len(dplaces) == 1:
+            # d can only be in one place in unit; assign it there
+            # if not assign(values, dplaces[0], d):
+            if not assign(values, dplaces[0], d):
+                return false
+    return true
+
+proc display(values: Table[string, string]) =
+    # Display these values as a 2D grid.
+    # let maxValuesLen = max(values.values.toSeq.map(x => x.len))
+    
+    var maxValuesLen: int
+    for val in values.values.toSeq:
+        # echo "val: ", val
+        maxValuesLen = max(maxValuesLen, len(val))
+    # echo "maxValuesLen: ", maxValuesLen
+
+    let width = maxValuesLen + 1
+    
+    # Create horizontal line
+    var temp: seq[string]
+    for x in 0 ..< 3:
+        temp.add("-".repeat(width * 3))
+    let line: string = temp.join("+")
+    # echo line
+
+    for r in rows:
+        temp = @[]
+        for c in cols:
+            var cell: string
+            cell = values[r & c].center(width)
+            if c in "36":
+                cell &= "|"
+            temp.add(cell)
+        # echo ().join("")
+        echo temp.join("")
+        if r in "CF":
+            echo line
+
+#let grid1 = "4.....8.5.3..........7......2.....6.....8.4......1.......6.3.7.5..2.....1.4......"
+let grid1 = "003020600900305001001806400008102900700000008006708200002609500800203009005010300"
+let parsed_grid = parse_grid(grid1)
+echo "grid1: ", grid1
+# echo "parsed_grid: ", parsed_grid
+# echo "parsed_grid type: ", type(parsed_grid)
+# assert len(parsed_grid) == 81
+# echo "Parsed grid / starting grid:"
+display(parsed_grid)
+# Should be completely solved by parser since this is one of the easier Project Euler sudoku puzzles
+
+
+proc search(values: var Table[string, string]): bool
+
+proc solve(grid: string): Table[string, string] =
+    var values = parse_grid(grid)
+    # echo "Starting grid:"
+    # display(values)
+    let solved = search(values)
+    assert solved == true
+    return values
+
+proc solve(values: Table[string, string]): Table[string, string] =
+    var valuesCopy = values
+    let solved = search(valuesCopy)
+    assert solved == true
+    return valuesCopy
+
+proc search(values: var Table[string, string]): bool =
+    # Using depth-first search and propagation, try all possible values.
+
+    if values.values.toSeq.all(proc (vals: string): bool = vals.len() == 1):
+        return true  # Solved!
+
+    # Choose the unfilled square s with the fewest possibilities
+    var s: string
+    var n: int = 999
+    for s2, v in values:
+        let numValues = len(v)
+        if numValues < n and numValues > 1:
+            s = s2
+            n = numValues
+    #         echo "s=", s, "; n=", n, "; v=", v
+    # echo "unfilled square with fewest possibilities: s=", s, "; n=", n
+    # display(values)
+
+    for d in values[s]:
+        var valuesCopy = values
+        let assigned = assign(valuesCopy, s, $d)
+        if assigned:
+            let solveSuccess = search(valuesCopy)
+            if solveSuccess:
+                values = valuesCopy  # Copy solution to values
+                # echo "assigned/valuesCopy:"
+                # display(valuesCopy)
+                echo "Solved!!!"
+                return solveSuccess
+    return false
+
+# let solved = solve(grid1)
+# echo "Solved:"
+# display(solved)
+
+let grid2 = "4.....8.5.3..........7......2.....6.....8.4......1.......6.3.7.5..2.....1.4......"
+let parsed = parse_grid(grid2)
+echo "Parsed:"
+echo parsed
+display(parsed)
+let solved = solve(parsed)
+echo "Solved:"
+display(solved)
