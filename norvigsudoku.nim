@@ -398,7 +398,9 @@ proc main() =
         try:
             let parsed = parse_grid(stringArg1)
             let solved = solve(parsed)
-            displayTwoGridValues(parsed, solved, "Parsed", "Sovled")
+            echo ""
+            displayTwoGridValues(parsed, solved, "Parsed", "Solved")
+            echo ""
         except AssertionDefect as exc:
             echo "Unable to convert string argument to sudoku puzzle."
             echo "Goodbye!"
