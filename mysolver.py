@@ -1,4 +1,5 @@
 # Based on the computerphile Sudoku solver, but converted into an iterative solution as opposed to recursive for FUN :-).
+# This version also has the ability to return all solutions for a non-ideal sudoku puzzle (multiple solutions)
 
 import datetime
 from pprint import pprint
